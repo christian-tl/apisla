@@ -1,0 +1,158 @@
+#!/usr/bin/perl
+
+use 5.010;
+use File::ReadBackwards;
+use LWP::UserAgent;
+use HTTP::Request;
+use HTTP::Response;
+
+=pod
+1 解析ENV
+2 读日志文件
+3 解析日志文件
+4 处理结果格式
+5 发送
+=cut
+
+
+
+&check_env;
+&init;
+&parse_env;
+&read_log;
+&analysis_log1;
+&handle_log;
+&send_result;
+&release_resource;
+
+
+#检查ENV
+sub check_env{
+	say "check_env";
+}
+
+#解析ENV
+sub parse_env{
+#APISLA_APIS=name1:url1 name2:url2 name3:url3
+#APISLA_PATH_CONTAINER=/var/log/tomcat
+#APISLA_PATH_APPLICATION=/var/log/application
+#APISLA_PATH_SELF=/var/log/apisla
+	say "parse_env";
+	$what = "queryprodstock|queryprodstock2|queryprodstock3";
+}
+
+#INIT
+sub init{
+	say "init";
+	$access_log_prefix = "access_log";
+	$access_log_name = "access.log";
+	$curosr_log = "/home/ltian/work/opensource/perl/data/apisla.log";
+	$container_log = "/home/ltian/work/opensource/perl/data/access.log";
+}
+
+#读日志文件
+sub read_log{
+	say "read_log";
+	$cursor = &get_cursor;
+
+	$linecount = `cat $container_log | wc -l `;
+	$read_step = $linecount - $cursor;
+	print "linecount : " , $linecount , "cursor : " , $cursor , "read_step : " , $read_step ,"\n";
+
+	&save_cursor;
+	
+	#open(FILE,"<",$container_log ) || die "cannot open the file: \n";
+	#while(<FILE>){print;}
+
+	tie *FILE, 'File::ReadBackwards', $container_log or die "can't read 'log_file' $!" ;
+
+}
+
+#解析容器日志文件
+sub analysis_log1{
+	say "analysis_log";
+	
+	$index_r = 0;
+	while(<FILE>){
+		$index_r++;
+		if($index_r <= $read_step){
+			if( $_  =~ /$what/){
+				#print $_;
+				#foreach( @fields){say;}
+				my @fields = split;
+				print $fields[0]," ",$fields[1]," ",$fields[2];
+				print "\n";
+			}
+		}
+		
+	}
+}
+
+#解析程序日志文件
+sub analysis_log2{
+	say "analysis_log";
+	my $what = "queryprodstock2|queryprodstock3";
+
+	while(<FILE>){
+		if( $_  =~ /$what/){
+			#print $_;
+			my @fields = split;
+		        #foreach( @fields){say;}
+			say $fields[0];
+			say $fields[1];
+			say $fields[2];
+		}
+	}
+}
+
+#处理结果格式
+sub handle_log{
+	say "handle_log";
+	say "$ENV{APISLA}";
+
+	$abc{"1"}='123';
+	$abc{"2"}='456';
+
+	say $abc{"1"};
+	say $abc{"2"};
+
+	$user{"tianle"}{"1"} = 6789;
+
+	say $user{"tianle"}{"1"};
+}
+
+#发送
+sub send_result{
+	say "send_result";
+ 	my $ua = LWP::UserAgent->new;  
+ 	my $req = HTTP::Request->new('POST' => 'http://127.0.0.1:8080/logtest/hello2');  
+	$req->content_type('text/html');
+	$req->content("name=zhangsan&id=123");
+	my $res = $ua->request($req);  
+	print $res->status_line."\n";  
+	#print $res->as_string();
+	print "\n";
+	print $res->content();
+}
+
+#得到上一次截至行的游标
+sub get_cursor{
+	open(CURSOR,"<",$curosr_log) || die "cannot open the file: \n";
+	@linelist=<CURSOR>;
+	return $linelist[0];
+}
+
+#保存本次最后一行的行号到游标
+sub save_cursor{
+	open CURSOR_OUT , ">" ,$curosr_log;
+	print CURSOR_OUT $linecount;
+}
+
+sub release_resource{
+	say "release_resource";
+	close CURSOR;
+	close CURSOR_OUT;
+	close FILE;
+}
+
+
