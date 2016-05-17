@@ -1,6 +1,7 @@
 #!/usr/bin/perl
 
 use 5.010;
+use Switch;
 use File::ReadBackwards;
 use LWP::UserAgent;
 use HTTP::Request;
@@ -13,7 +14,6 @@ use HTTP::Response;
 4 处理结果格式
 5 发送
 =cut
-
 
 
 &check_env;
@@ -44,6 +44,30 @@ sub parse_env{
 #INIT
 sub init{
 	say "init";
+
+	$ms10 = "10ms";
+	$ms20 = "20ms";
+	$ms30 = "30ms";
+	$ms40 = "40ms";
+	$ms50 = "50ms";
+	$ms60 = "60ms";
+	$ms70 = "70ms";
+	$ms80 = "80ms";
+	$ms90 = "90ms";
+	$ms100 = "100ms";
+	$ms150 = "150ms";
+	$ms200 = "200ms";
+	$ms300 = "300ms";
+	$ms400 = "400ms";
+	$ms500 = "500ms";
+	$s1 = "1s";
+	$s2 = "2s";
+	$s3 = "3s";
+	$s4 = "4s";
+	$s5 = "5s";
+	$s10 = "10s";
+	$s10plus = "10splus";
+	
 	$access_log_prefix = "access_log";
 	$access_log_name = "access.log";
 	$curosr_log = "/home/ltian/work/opensource/perl/data/apisla.log";
@@ -59,13 +83,9 @@ sub read_log{
 	$read_step = $linecount - $cursor;
 	print "linecount : " , $linecount , "cursor : " , $cursor , "read_step : " , $read_step ,"\n";
 
-	&save_cursor;
+	#&save_cursor;
 	
-	#open(FILE,"<",$container_log ) || die "cannot open the file: \n";
-	#while(<FILE>){print;}
-
 	tie *FILE, 'File::ReadBackwards', $container_log or die "can't read 'log_file' $!" ;
-
 }
 
 #解析容器日志文件
@@ -77,15 +97,44 @@ sub analysis_log1{
 		$index_r++;
 		if($index_r <= $read_step){
 			if( $_  =~ /$what/){
-				#print $_;
-				#foreach( @fields){say;}
 				my @fields = split;
 				print $fields[0]," ",$fields[1]," ",$fields[2];
 				print "\n";
+				&cal_sla($fields[1],$fields[2]);
 			}
 		}
-		
 	}
+}
+
+#具体的计算逻辑
+sub cal_sla{
+	#$url = $_[0], $val = $_[1];;
+	my($url,$time) = @_;
+	switch($time){
+		case [0..10]       { $result{$url}{$ms10} += 1 }
+		case [11..20]      { $result{$url}{$ms20} += 1 }
+		case [21..30]      { $result{$url}{$ms30} += 1}
+		case [31..40]      { $result{$url}{$ms40} += 1 }
+		case [41..50]      { $result{$url}{$ms50} += 1 }
+		case [51..60]      { $result{$url}{$ms60} += 1 }
+		case [61..70]      { $result{$url}{$ms70} += 1 }
+		case [71..80]      { $result{$url}{$ms80} += 1 }
+		case [81..90]      { $result{$url}{$ms90} += 1 }
+		case [91..100]     { $result{$url}{$ms100} += 1 }
+		case [101..150]    { $result{$url}{$ms150} += 1 }
+		case [151..200]    { $result{$url}{$ms200} += 1 }
+		case [201..300]    { $result{$url}{$ms300} += 1 }
+		case [301..400]    { $result{$url}{$ms400} += 1 }
+		case [401..500]    { $result{$url}{$ms500} += 1 }
+		case [501..1000]   { $result{$url}{$s1} += 1 }
+		case [1001..2000]  { $result{$url}{$s2} += 1 }
+		case [2001..3000]  { $result{$url}{$s3} += 1 }
+		case [3001..4000]  { $result{$url}{$s4} += 1 }
+		case [4001..5000]  { $result{$url}{$s5} += 1 }
+		case [5001..10000] { $result{$url}{$s10} += 1 }
+		else               { $result{$url}{$s10plus} += 1 }
+	}
+	
 }
 
 #解析程序日志文件
@@ -108,17 +157,30 @@ sub analysis_log2{
 #处理结果格式
 sub handle_log{
 	say "handle_log";
-	say "$ENV{APISLA}";
+	
+	my $json= '{ "apisla" : [ ';	
 
-	$abc{"1"}='123';
-	$abc{"2"}='456';
+	foreach my $key1 (keys %result){
+		my $hash2 = $result{$key1};
+		
+		my $json_ = '{"apiurl" : '.'"'."$key1".'",';
+		my $json_1 = '';
+		#print $json_; 
+		foreach my $key2 ( keys %$hash2){
+			my $json_2 = '"'.$key2.'"'.' : '.'"'.$hash2->{$key2}.'",';
+			$json_1 = $json_1.$json_2;
+			#print $key1."\t".$key2."\t".$hash2->{$key2}."\n";
+		}
+		$json_1 = substr($json_1,0,rindex($json_1,","));
+		$json_ = $json_ . $json_1 . ' },';
+		$json  = $json . $json_ ;
+		#print $json_."\n";
+	}
+	$json = substr($json,0,rindex($json,","));
+	$json  = $json . ' ] }';
 
-	say $abc{"1"};
-	say $abc{"2"};
-
-	$user{"tianle"}{"1"} = 6789;
-
-	say $user{"tianle"}{"1"};
+	print "".$json . "\n";
+	print "\n";
 }
 
 #发送
