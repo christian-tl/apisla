@@ -4,8 +4,6 @@ use 5.010;
 use Switch;
 use File::ReadBackwards;
 use LWP::UserAgent;
-use HTTP::Request;
-use HTTP::Response;
 
 =pod
 =cut
@@ -29,6 +27,7 @@ sub check_env{
 	if(!$APISLA_HOME ){
 		say "please set APISLA_HOME ";
 	}
+	#$APISLA_HOME = ".";
 	#$APISLA_HOME = "/home/ltian/work/opensource/perl/data";
 	say "APISLA_HOME : $APISLA_HOME";
 }
@@ -65,15 +64,20 @@ sub init_logfiles{
 	@slalog = &get_slalog;
 	$timestamp = $slalog[1];
 	chomp($timestamp);
+	if($timestamp =~ /^\s*$/){
+		$timestamp = $current_time
+	}
 	say "timestamp ".$timestamp;
 	
 	open(PROPS,"<",$properties_file) || die "cannot open the file: \n";
 	my @props=<PROPS>;
 	chomp($props[0]);
 	chomp($props[1]);
+	chomp($props[2]);
 	
 	$container_log_path    = $props[0];
 	$application_log_path  = $props[1];
+	$sla_server_url        = $props[2];
 
 	#$container_log_path    = "/home/ltian/work/opensource/perl/data";
 	$container_log_file = $container_log_path ."/access_log.".$timestamp.".txt";
@@ -82,19 +86,20 @@ sub init_logfiles{
 }
 
 sub init_apis{
-	#$APIS = "\/queryprodstock|\/queryprodstock2|\/queryprodstock3";
-	$APIS = "\/promo\/find_history_min_promo_price"
-		."|\/promo\/find_promo_base_by_ids"
-		."|\/activity_query.php"
-		."|\/productapi\/find_product_promo"
-		."|\/productapi\/find_product_promo_lighter"
-		."|\/productapi\/find_product_price"
-		."|\/promo\/find_promo_product_list"
-		."|\/productapi\/find_promo_collection"
-		."|\/productapi\/shop_promo_product_except"
-		."|\/productapi\/find_promo_setting"
-		."|\/promo\/find_promo_list_by_product_id_and_period"
-		."|\/productapi\/find_promo_shop";
+	
+	open(APIS,"<",$apis_file) || die "cannot open the file: \n";
+	
+	my $api_tmp = "";
+	while(<APIS>){
+		$_ =~ s/\//\\\//g;
+		if(!( $_ =~ /^\s*$/ ) ){
+			#print $_   ;
+			chomp($_);
+			$api_tmp = $api_tmp."|".$_;
+		}
+	}
+
+	$APIS  = substr($api_tmp,1);
 }
 
 #读日志文件
@@ -199,7 +204,7 @@ sub handle_log{
 sub send_result{
  	my $ua = LWP::UserAgent->new;
  
-	my $server_endpoint = "http://192.168.134.208:8080/logtest/apisla";
+	my $server_endpoint = $sla_server_url;
 	my $resp = $ua->post($server_endpoint,{'sla'=> $json });
 	if ($resp->is_success) {
 	    my $message = $resp->decoded_content;
@@ -236,6 +241,8 @@ sub release_resource{
 	close CURSOR;
 	close CURSOR_OUT;
 	close FILE;
+	close APIS;
+	close PROPS;
 	$end = time();
 	print 'cost time : '.($end-$start)," s\n";
 	
