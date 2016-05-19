@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 
-use 5.010;
+use POSIX;
 use Switch;
 use File::ReadBackwards;
 use LWP::UserAgent;
@@ -25,11 +25,11 @@ if($APISLA_HOME){
 sub check_env{
 	$APISLA_HOME = $ENV{"APISLA_HOME"};
 	if(!$APISLA_HOME ){
-		say "please set APISLA_HOME ";
+		print "please set APISLA_HOME \n";
 	}
 	#$APISLA_HOME = ".";
 	#$APISLA_HOME = "/home/ltian/work/opensource/perl/data";
-	say "APISLA_HOME : $APISLA_HOME";
+	print "APISLA_HOME : $APISLA_HOME \n";
 }
 
 #INIT
@@ -43,8 +43,15 @@ sub init{
 	($week,$mon,$day,$ht,$year)=split(" ",$now);
 	@months{qw(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec)}=split(",","01,02,03,04,05,06,07,08,09,10,11,12");
 	$mon=$months{$mon};
+	if($hour < 10){
+		$hour = "0"."$hour";
+	}
 	$current_time = $year ."-".$mon ."-".$day .".".$hour;
-	say "current_time ".$current_time;
+	print "current_time ".$current_time . "\n";
+	$SLA500 = 0.5;
+	$SLA800 = 0.8;
+	$SLA995 = 0.995;
+	$SLA999 = 0.999;
 	
 }
 
@@ -67,7 +74,6 @@ sub init_logfiles{
 	if($timestamp =~ /^\s*$/){
 		$timestamp = $current_time
 	}
-	say "timestamp ".$timestamp;
 	
 	open(PROPS,"<",$properties_file) || die "cannot open the file: \n";
 	my @props=<PROPS>;
@@ -81,7 +87,7 @@ sub init_logfiles{
 
 	#$container_log_path    = "/home/ltian/work/opensource/perl/data";
 	$container_log_file = $container_log_path ."/access_log.".$timestamp.".txt";
-	say "container_log_file :".$container_log_file;
+	print "container_log_file :".$container_log_file ."\n";
 	$application_log_file = $application_log_path."/dailylog.log";
 }
 
@@ -123,7 +129,17 @@ sub analysis_container_log{
 				my @fields = split;
 				#print $fields[0]," ",$fields[1]," ",$fields[2]."\n";
 				&cal_sla($fields[1],$fields[2]);
-				$result{$fields[1]}{"total"} += 1
+
+				$result{$fields[1]}{"total"} += 1;
+
+				if( exists $resultSla{$fields[1]} ){
+					my $key = $fields[1];
+					push (@{$resultSla{$key}}, $fields[2]);
+				}else{
+					my $array = [];
+					push (@$array, $fields[2]);
+					$resultSla{$fields[1]} = $array;
+				}
 			}
 		}
 	}
@@ -168,9 +184,7 @@ sub analysis_log2{
 			#print $_;
 			my @fields = split;
 		        #foreach( @fields){say;}
-			say $fields[0];
-			say $fields[1];
-			say $fields[2];
+			#say $fields[0];say $fields[1];say $fields[2];
 		}
 	}
 }
@@ -182,11 +196,20 @@ sub handle_log{
 
 	foreach my $key1 (keys %result){
 		my $hash2 = $result{$key1};
-		
+		my %hash3 = %$hash2;
+
+		my @sortedsla = sort {$a <=> $b} @{$resultSla{$key1}};	
+		my $total_ = $hash3{"total"};
+
+		$hash3{"sla500"} = $sortedsla[ (POSIX::ceil ($total_ * $SLA500)) - 1  ];	
+		$hash3{"sla800"} = $sortedsla[ (POSIX::ceil ($total_ * $SLA800)) - 1  ];
+		$hash3{"sla995"} = $sortedsla[ (POSIX::ceil ($total_ * $SLA995)) - 1  ];
+		$hash3{"sla999"} = $sortedsla[ (POSIX::ceil ($total_ * $SLA999)) - 1  ];
+
 		my $json_ = '{"apiurl" : '.'"'."$key1".'",';
 		my $json_1 = '';
-		foreach my $key2 ( keys %$hash2){
-			my $json_2 = '"'.$key2.'"'.' : '.'"'.$hash2->{$key2}.'",';
+		foreach my $key2 ( keys %hash3){
+			my $json_2 = '"'.$key2.'"'.' : '.'"'.$hash3{$key2}.'",';
 			$json_1 = $json_1.$json_2;
 		}
 		$json_1 = substr($json_1,0,rindex($json_1,","));
