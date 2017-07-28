@@ -2,7 +2,6 @@
 
 use POSIX;
 use Switch;
-use File::ReadBackwards;
 use LWP::UserAgent;
 
 =pod
@@ -12,13 +11,71 @@ use LWP::UserAgent;
 &check_env;
 if($APISLA_HOME){
 	&init;
-	&read_config;
-	&read_log;
-	&analysis_container_log;
-	&handle_log;
-	&save_slalog;
+	print "==================== container SLA ==================== \n";
+	$apisla_log_index = 0;
+	$container_flag = 1;
+	foreach(@container_array){
+		print "***** $_ ***** \n";
+		if(uc($_) eq uc('null')){
+			print "***** there's no container log need to be analysis ***** \n";
+			$container_flag = 0;
+			last;
+		}
+		$apisla_log_index++;
+		@fields_ = split /:/, $_;
+		$container_log_path = $fields_[0];
+		$sysID = $fields_[1];
+		$curosr_log_file = $APISLA_HOME."/apisla_container.".$apisla_log_index.".log";
+		&do_container_sla;
+	}
+	
+	print "==================== application SLA ==================== \n";
+	$apisla_log_index = 0;
+	$app_flag = 1;
+	foreach(@app_array){
+		print "***** $_ ***** \n";
+		if(uc($_) eq uc('null')){
+			print "***** there's no application log need to be analysis ***** \n";
+			$app_flag = 0;
+			last;
+		}
+		$apisla_log_index++;
+		@fields_ = split /:/, $_;
+		$application_log_path = $fields_[0];
+		$sysID = $fields_[1];
+		$curosr_log_file = $APISLA_HOME."/apisla_app.".$apisla_log_index.".log";
+		&do_app_sla;
+	}
+	
+	print "==================== SLA JSON ==================== \n";
+	&cal_result;
 	&send_result;
 	&release_resource;
+	
+}
+
+sub do_container_sla{
+	if(&read_container_log){
+		&analysis_container_log;
+		&save_slalog;
+		$container_flag = 1;
+	}else{
+		$container_flag = 0;
+		&del_slalog;
+		print "can not find container log file : $container_log_file\n";
+	}	
+}
+
+sub do_app_sla{
+	if(&read_app_log){
+		&analysis_app_log;
+		&save_slalog;
+		$app_flag = 1;
+	}else{
+		$app_flag = 0;
+		&del_slalog;
+		print "can not find app log file : $application_log_file\n";
+	}
 }
 
 #检查ENV
@@ -27,208 +84,353 @@ sub check_env{
 	if(!$APISLA_HOME ){
 		print "please set APISLA_HOME \n";
 	}
-	#$APISLA_HOME = ".";
-	#$APISLA_HOME = "/home/ltian/work/opensource/perl/data";
 	print "APISLA_HOME : $APISLA_HOME \n";
 }
 
 #INIT
 sub init{
-	$start =  time();
-	$now=localtime( $start );
 
+	$APIS = "";
+	$sysID = "";
+	$sla_server_url = "";
+	%api_hash = ();
+	%resultSla = ();
+	@container_array = ();
+	@app_array = ();
+	@container_json_array = ();
+	@app_json_array = ();
 
-	($sec,$min,$hour,$day,$mon,$year,$wday,$yday,$isdst)=localtime( $start );
-	
-	($week,$mon,$day,$ht,$year)=split(" ",$now);
-	@months{qw(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec)}=split(",","01,02,03,04,05,06,07,08,09,10,11,12");
-	$mon=$months{$mon};
-	if($hour < 10){
-		$hour = "0"."$hour";
-	}
-	$current_time = $year ."-".$mon ."-".$day .".".$hour;
-	print "current_time ".$current_time . "\n";
 	$SLA500 = 0.5;
 	$SLA800 = 0.8;
 	$SLA995 = 0.995;
 	$SLA999 = 0.999;
-	
+
+	&init_time;
+	&init_props;
+	&init_apis;
+
 }
 
-#解析CONFIG
-sub read_config{
-	
+sub init_time{
+	$start =  time();
+	$current_time = strftime("%Y-%m-%d.%H",localtime( $start ));
+	$current_time_str = strftime("%Y-%m-%d %H:%M",localtime( $start - 60 ));
+	print "current_time ".$current_time . "\n";
+	print "current_time_str ".$current_time_str . "\n";
+}
+
+sub init_props{
 	$properties_file = $APISLA_HOME."/apisla.properties";
-	$apis_file = $APISLA_HOME."/apis.txt"; 
-	$curosr_log_file = $APISLA_HOME."/apisla.log";
-	
-	&init_logfiles;	
-	&init_apis;	
-	
-}
-
-sub init_logfiles{
-	@slalog = &get_slalog;
-	$timestamp = $slalog[1];
-	chomp($timestamp);
-	if($timestamp =~ /^\s*$/){
-		$timestamp = $current_time
-	}
-	
 	open(PROPS,"<",$properties_file) || die "cannot open the file: \n";
-	my @props=<PROPS>;
+	@props=<PROPS>;
 	chomp($props[0]);
 	chomp($props[1]);
 	chomp($props[2]);
+	@container_array = split /\s+/ , $props[0];
+	@app_array = split /\s+/ , $props[1];
+	$sla_server_url = $props[2];
 	
-	$container_log_path    = $props[0];
-	$application_log_path  = $props[1];
-	$sla_server_url        = $props[2];
-
-	#$container_log_path    = "/home/ltian/work/opensource/perl/data";
-	$container_log_file = $container_log_path ."/access_log.".$timestamp.".txt";
-	print "container_log_file :".$container_log_file ."\n";
-	$application_log_file = $application_log_path."/dailylog.log";
 }
 
 sub init_apis{
-	
+	$apis_file = $APISLA_HOME."/apis.txt";
 	open(APIS,"<",$apis_file) || die "cannot open the file: \n";
-	
 	my $api_tmp = "";
 	while(<APIS>){
-		$_ =~ s/\//\\\//g;
 		if(!( $_ =~ /^\s*$/ ) ){
-			#print $_   ;
-			chomp($_);
-			$api_tmp = $api_tmp."|".$_;
+		chomp($_);
+		my @fields = split;
+		my $api = $fields[0];
+		$api =~ s/(^\s+)|(\s+)$//g ;
+		my $apiId = $fields[1];
+		$apiId =~ s/(^\s+)|(\s+)$//g ;
+		my $sysId = $fields[2];
+		$sysId =~ s/(^\s+)|(\s+)$//g ;
+
+		$api_hash{$sysId.":".$api} = $apiId;
+	
+		#判断API URL是否通配格式
+		if( $api =~ /^\S*\.\*$/ ){
+			$api = substr($api,0,rindex($api,"."));
+		}
+		$api =~ s/\//\\\//g;
+		$api =~ s/\?/\\\?/g;
+		$api =~ s/\+/\\\+/g;
+		$api =~ s/\*/\\\*/g;
+		$api =~ s/\^/\\\^/g;
+		$api =~ s/\$/\\\$/g;
+		$api =~ s/\|/\\\|/g;
+		$api =~ s/\[/\\\[/g;
+		$api =~ s/\]/\\\]/g;
+		$api =~ s/\{/\\\{/g;
+		$api =~ s/\}/\\\}/g;
+		$api =~ s/\(/\\\(/g;
+		$api =~ s/\)/\\\)/g;
+		
+		$api_tmp = $api_tmp."|".$api;
 		}
 	}
-
-	$APIS  = substr($api_tmp,1);
+	$APIS = substr($api_tmp,1);
 }
 
 #读日志文件
-sub read_log{
+sub read_container_log{
+	@slalog = &get_slalog;
 	$cursor = $slalog[0];
-	$linecount = `cat $container_log_file | wc -l `;
+	$timestamp = $slalog[1];
+	chomp($cursor);
+	chomp($timestamp);
+	if(!$cursor){
+		$cursor = 0;
+	}
+	if(!$timestamp){
+		$timestamp = $current_time;
+	}
 
-	$read_step = $linecount - $cursor;
-	print "linecount : " , $linecount , "cursor : " , $cursor , "read_step : " , $read_step ,"\n";
-	tie *FILE, 'File::ReadBackwards', $container_log_file or die "can't read 'log_file' $!" ;
+	$container_log_file = $container_log_path ."/access_log.".$timestamp.".txt";
+	if(-e $container_log_file){
+		print "container_log_file :".$container_log_file ." cursor : ".$cursor."\n";
+		open(FILE1,"<",$container_log_file) || die "can't read 'log_file' $!" ;
+		return 1;
+	}else{
+		return 0;
+	}
+	
 }
+
+#读日志文件
+sub read_app_log{
+	@slalog = &get_slalog;
+	$cursor = $slalog[0];
+	$timestamp = $slalog[1];
+	chomp($cursor);
+	chomp($timestamp);
+	if(!$cursor){
+		$cursor = 0;
+	}
+	if(!$timestamp){
+		$timestamp = $current_time;
+	}
+
+	$application_log_file = $application_log_path."/dailylog.".$timestamp;
+	if(-e $application_log_file){
+		print "application_log_file :".$application_log_file ." cursor : ".$cursor."\n";
+		open(FILE2,"<",$application_log_file) || die "can't read 'log_file' $!" ;
+		return 1;
+	}else{
+		return 0;
+	}
+	
+}
+
 
 #解析容器日志文件
 sub analysis_container_log{
 	
-	$index_r = 0;
-	while(<FILE>){
+	my %result = ();
+	my $index_r = 0;
+	%resultSla = ();
+	$linecount = 0;
+	while(<FILE1>){
+		$linecount++;
 		$index_r++;
-		if($index_r <= $read_step){
+		if($index_r > $cursor){
 			if( $_  =~ /$APIS/){
 				my @fields = split;
-				#print $fields[0]," ",$fields[1]," ",$fields[2]."\n";
-				&cal_sla($fields[1],$fields[2]);
+				#$fields[0],"记录时间",$fields[1],"APIURL",$fields[2]."API耗时";
+				my $key = $fields[1];
+				if($key =~ /^\S*\;/){
+					$key = substr($key,0,rindex($key,";"));
+				}
+				$result{$key}{"total"} += 1;
+				$result{$key}{"stattype"} = "provider";
 
-				$result{$fields[1]}{"total"} += 1;
-
-				if( exists $resultSla{$fields[1]} ){
-					my $key = $fields[1];
+				if( exists $resultSla{$key} ){
+					
 					push (@{$resultSla{$key}}, $fields[2]);
 				}else{
 					my $array = [];
 					push (@$array, $fields[2]);
-					$resultSla{$fields[1]} = $array;
+					$resultSla{$key} = $array;
 				}
 			}
 		}
 	}
-}
-
-#具体的计算逻辑
-sub cal_sla{
-	my($url,$time) = @_;
-	switch($time){
-		case [0..10]       { $result{$url}{"ms10"} += 1 }
-		case [11..20]      { $result{$url}{"ms20"} += 1 }
-		case [21..30]      { $result{$url}{"ms30"} += 1}
-		case [31..40]      { $result{$url}{"ms40"} += 1 }
-		case [41..50]      { $result{$url}{"ms50"} += 1 }
-		case [51..60]      { $result{$url}{"ms60"} += 1 }
-		case [61..70]      { $result{$url}{"ms70"} += 1 }
-		case [71..80]      { $result{$url}{"ms80"} += 1 }
-		case [81..90]      { $result{$url}{"ms90"} += 1 }
-		case [91..100]     { $result{$url}{"ms100"} += 1 }
-		case [101..150]    { $result{$url}{"ms150"} += 1 }
-		case [151..200]    { $result{$url}{"ms200"} += 1 }
-		case [201..300]    { $result{$url}{"ms300"} += 1 }
-		case [301..400]    { $result{$url}{"ms400"} += 1 }
-		case [401..500]    { $result{$url}{"ms500"} += 1 }
-		case [501..1000]   { $result{$url}{"s1"} += 1 }
-		case [1001..2000]  { $result{$url}{"s2"} += 1 }
-		case [2001..3000]  { $result{$url}{"s3"} += 1 }
-		case [3001..4000]  { $result{$url}{"s4"} += 1 }
-		case [4001..5000]  { $result{$url}{"s5"} += 1 }
-		case [5001..10000] { $result{$url}{"s10"} += 1 }
-		else               { $result{$url}{"s10plus"} += 1 }
-	}
-	
+	my $json = &handle_log(%result);
+	#print "===========json1 \n";print "$json \n";
+	push @container_json_array , $json;
 }
 
 #解析程序日志文件
-sub analysis_log2{
-	my $what = "queryprodstock2|queryprodstock3";
-
-	while(<FILE>){
-		if( $_  =~ /$what/){
-			#print $_;
-			my @fields = split;
-		        #foreach( @fields){say;}
-			#say $fields[0];say $fields[1];say $fields[2];
+sub analysis_app_log{
+	
+	my %result = ();
+	my $index_r = 0;
+	%resultSla = ();
+	$linecount = 0;
+	while(<FILE2>){
+		$linecount++;
+		$index_r++;
+		if($index_r > $cursor){
+			if( $_  =~ /API-SLA-ANALYSIS/i){
+				#print $_;
+				my $key = "";
+				if($_ =~ /APIURL=(\S+) /i){
+					my $pair = $&;
+					$pair =~ s/\s+$//g ;
+					my @fields  = split  /=/ , $pair;
+					my @field_url = ();
+					my $ind = 0;
+					foreach(@fields){
+						if($ind >= 1){
+							push (@field_url, $_);
+						}
+						$ind++;
+					}
+					my $url = join "=" , @field_url;
+					$key = $url;
+					$result{$key}{"total"} += 1;
+					
+					if($_ =~ /RESPONSETIME=(\w+) /i){
+						my $pair = $&;
+						my @fields  = split  /=/ , $pair;
+						chomp($fields[1]);
+						$fields[1] =~ s/\s+$//g ;
+						if( exists $resultSla{$key} ){
+							push (@{$resultSla{$key}}, $fields[1]);
+						}else{
+							my $array = [];
+							push (@$array, $fields[1]);
+							$resultSla{$key} = $array;
+						}
+					}
+					if($_ =~ /SUCCESSFLAG=(\w+) /i){
+						my $pair = $&;
+						my @fields  = split  /=/ , $pair;
+						chomp($fields[1]);
+						$fields[1] =~ s/\s+$//g ;
+						if(uc($fields[1]) eq uc("true")){
+							$result{$key}{"success"} += 1;
+						}else{
+							$result{$key}{"fail"} += 1;
+						}
+					}
+					if($_ =~ /STATTYPE=(\w+) /i){
+						my $pair = $&;
+						my @fields  = split  /=/ , $pair;
+						chomp($fields[1]);
+						$fields[1] =~ s/\s+$//g ;
+						if(uc($fields[1]) eq uc("provider")){
+							$result{$key}{"stattype"} = "provider";
+						}else{
+							$result{$key}{"stattype"} = "consumer";
+						}
+					}
+				}
+				
+			}
 		}
 	}
+	
+	my $json = &handle_log(%result);
+	#print "===========json2 \n";print "$json \n";
+	push @app_json_array , $json;
 }
+
 
 #处理结果格式
 sub handle_log{
 	
-	$json= '{ "apisla" : [ ';	
-
-	foreach my $key1 (keys %result){
-		my $hash2 = $result{$key1};
-		my %hash3 = %$hash2;
-
-		my @sortedsla = sort {$a <=> $b} @{$resultSla{$key1}};	
-		my $total_ = $hash3{"total"};
-
-		$hash3{"sla500"} = $sortedsla[ (POSIX::ceil ($total_ * $SLA500)) - 1  ];	
-		$hash3{"sla800"} = $sortedsla[ (POSIX::ceil ($total_ * $SLA800)) - 1  ];
-		$hash3{"sla995"} = $sortedsla[ (POSIX::ceil ($total_ * $SLA995)) - 1  ];
-		$hash3{"sla999"} = $sortedsla[ (POSIX::ceil ($total_ * $SLA999)) - 1  ];
-
-		my $json_ = '{"apiurl" : '.'"'."$key1".'",';
-		my $json_1 = '';
-		foreach my $key2 ( keys %hash3){
-			my $json_2 = '"'.$key2.'"'.' : '.'"'.$hash3{$key2}.'",';
-			$json_1 = $json_1.$json_2;
-		}
-		$json_1 = substr($json_1,0,rindex($json_1,","));
-		$json_ = $json_ . $json_1 . ' },';
-		$json  = $json . $json_ ;
-	}
-	$json = substr($json,0,rindex($json,","));
-	$json  = $json . ' ] }';
-
-	print "".$json . "\n";
+	my(%result_) = @_;
 	
+	my $json= '{ "apisla" : [ ';	
+	
+	if(%result_){
+		foreach my $key1 (keys %result_){
+			my $hash2 = $result_{$key1};
+			my %hash3 = %$hash2;
+
+			my @sortedsla = sort {$a <=> $b} @{$resultSla{$key1}};
+			my $total_ = $hash3{"total"};
+
+			$hash3{"sla500"} = $sortedsla[ (POSIX::ceil ($total_ * $SLA500)) - 1  ];	
+			$hash3{"sla800"} = $sortedsla[ (POSIX::ceil ($total_ * $SLA800)) - 1  ];
+			$hash3{"sla995"} = $sortedsla[ (POSIX::ceil ($total_ * $SLA995)) - 1  ];
+			$hash3{"sla999"} = $sortedsla[ (POSIX::ceil ($total_ * $SLA999)) - 1  ];
+
+			my $json_ = '{"apiurl" : '.'"'."$key1".'",';
+			my $json_1 = '';
+			foreach my $key2 ( keys %hash3){
+				my $json_2 = '"'.$key2.'"'.' : '.'"'.$hash3{$key2}.'",';
+				$json_1 = $json_1.$json_2;
+			}
+			$json_1 = substr($json_1,0,rindex($json_1,","));
+			my $apiID = "0";
+			if(exists $api_hash{$sysID.":".$key1}){
+				$apiID = $api_hash{$sysID.":".$key1};
+			}else{
+				my $key_tmp = $key1;
+				if($key1 =~ /^\S*\./){
+					$key_tmp = substr($key1,0,rindex($key1,"."));
+				}
+				if($key1 =~ /^\S*\;/){
+					$key_tmp = substr($key1,0,rindex($key1,";"));
+				}
+				$key_tmp = $key_tmp.".*";
+				if(exists $api_hash{$sysID.":".$key_tmp}){
+					$apiID = $api_hash{$sysID.":".$key_tmp};
+				}
+			}
+			
+			$json_ = $json_ . $json_1 . ',"apiId":"'.$apiID.'" ,"sysId":"'.$sysID.'" },';
+			$json  = $json . $json_ ;
+		}
+		$json = substr($json,0,rindex($json,","));
+	}
+	$json  = $json . ' ] }';
+	return $json;
+	
+}
+
+sub cal_result{
+	$container_json= '{ "timestamp": "'.$current_time_str.'", "result" : [ ';
+	$container_json_array_length = 0;
+	foreach(@container_json_array){
+	$container_json_array_length++;
+	$container_json = $container_json.$_." , ";
+	}
+	if($container_json_array_length > 0){
+	$container_json = substr($container_json,0,rindex($container_json,","));
+	$container_json  = $container_json . ' ] }';
+	}else{
+	   $container_json = '{}';
+	}
+	print "\n";
+	#print "$container_json\n";
+
+	$app_json = '{ "timestamp": "'.$current_time_str.'", "result" : [ ';
+	$app_json_array_length = 0;
+	foreach(@app_json_array){
+	  $app_json_array_length++;
+	  $app_json = $app_json.$_." , ";
+	}
+	if($app_json_array_length > 0){
+	   $app_json = substr($app_json,0,rindex($app_json,","));
+	   $app_json  = $app_json . ' ] }';
+	}else{
+	   $app_json = '{}';
+	}
+	print "\n";
+	#print "$app_json\n";
 }
 
 #发送
 sub send_result{
  	my $ua = LWP::UserAgent->new;
+	$ua->timeout(20);
  
 	my $server_endpoint = $sla_server_url;
-	my $resp = $ua->post($server_endpoint,{'sla'=> $json });
+	my $resp = $ua->post($server_endpoint,{'sla'=> $container_json,'app_sla'=> $app_json });
 	if ($resp->is_success) {
 	    my $message = $resp->decoded_content;
 	    print "Received reply: $message\n";
@@ -242,8 +444,12 @@ sub send_result{
 
 #得到上一次截至行的游标
 sub get_slalog{
-	open(CURSOR,"<",$curosr_log_file) || die "cannot open the file: \n";
-	my @linelist=<CURSOR>;
+	my @linelist= ();
+	print "curosr_log_file $curosr_log_file \n";
+	if(-e $curosr_log_file){
+		open(CURSOR,"<",$curosr_log_file) || die "cannot open the file: \n";
+		@linelist=<CURSOR>;
+	}
 	return @linelist;
 }
 
@@ -251,24 +457,26 @@ sub get_slalog{
 sub save_slalog{
 	open CURSOR_OUT , ">" ,$curosr_log_file;
 	if( $current_time eq $timestamp ){
-		print CURSOR_OUT $linecount;
+		print CURSOR_OUT $linecount."\n";
 		print CURSOR_OUT $timestamp;
 	}else{
 		print CURSOR_OUT "0\n";
 		print CURSOR_OUT $current_time;
 	}
-	
+}
+
+sub del_slalog{
+	unlink $curosr_log_file;
 }
 
 sub release_resource{
 	close CURSOR;
 	close CURSOR_OUT;
-	close FILE;
+	close FILE1;
+	close FILE2;
 	close APIS;
 	close PROPS;
 	$end = time();
 	print 'cost time : '.($end-$start)," s\n";
-	
 }
-
 
